@@ -1,0 +1,176 @@
+//以下是我用ai修改的,双击折叠按钮后一键展开展开,双击节点的部分则去除,实测用起来更舒服
+
+(() => {
+    /***************************自主配置begin**************************************/
+    // 修改配置后, 需要刷新页面(设置->快捷键->刷新), 否则会有问题
+
+    const CONFIG = {
+        DOUBLE_SWITCH     : true,  // 是否启用双击折叠按钮展开全部
+        DOUBLE_INTERVAL   : 200,   // 双击间隔时间 毫秒
+        UNFOLD_INTERVAL   : 200,   // 自动展开的点击间隔
+    };
+
+    /***************************自主配置end****************************************/
+
+    // 生成唯一ID用于日志标识
+    const SESSION_ID = Date.now();
+
+    // 点击类型枚举
+    const CLICK_TYPE = {
+        INVALID: 0,  // 无效的点击
+        NODE   : 1,  // 点击节点
+        ARROW  : 2,  // 点击折叠按钮
+        BOOK   : 3,  // 点击笔记本
+    };
+
+    // 工具函数
+    const utils = {
+        log(...args) {
+            console.log(`[${SESSION_ID}]:`, ...args);
+        },
+
+        sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        },
+
+        getTagName(element) {
+            return element?.tagName?.toLowerCase() || '';
+        }
+    };
+
+    // 树节点处理类
+    class TreeHandler {
+        constructor() {
+            this.clickQueue = [];    // 点击队列
+            this.isProcessing = false; // 是否正在处理队列
+            this.lastClickTime = 0;     // 上次点击时间
+        }
+
+        // 获取当前元素对应的种类
+        getClickType(element) {
+            if (!element) return CLICK_TYPE.INVALID;
+
+            let target = element;
+            let tagName = utils.getTagName(target);
+
+            // 处理SVG元素
+            if (tagName === 'use') {
+                target = element.parentElement.parentElement;
+            } else if (tagName === 'svg') {
+                target = element.parentElement;
+            }
+
+            tagName = utils.getTagName(target);
+            if (tagName === 'ul') {
+                return CLICK_TYPE.INVALID;
+            }
+            else if (tagName === 'li' && target.getAttribute('data-path') === '/') {
+                return CLICK_TYPE.BOOK;
+            }
+            else if (tagName === 'li') {
+                return CLICK_TYPE.NODE;
+            }
+            else if (tagName === 'span') {
+                if (target.classList.contains('b3-list-item__toggle')) {
+                    return CLICK_TYPE.ARROW;
+                }
+                else if (target.classList.contains('b3-list-item__text') &&
+                    target.parentElement.getAttribute('data-path') === '/') {
+                    return CLICK_TYPE.BOOK;
+                }
+                else if (target.classList.contains('b3-list-item__text')) {
+                    return CLICK_TYPE.NODE;
+                }
+            }
+            return CLICK_TYPE.INVALID;
+        }
+
+        // 获取折叠按钮的span元素
+        getArrowSpan(element) {
+            let target = element;
+            let tagName = utils.getTagName(target);
+
+            if (tagName === 'use') {
+                target = element.parentElement.parentElement;
+            } else if (tagName === 'svg') {
+                target = element.parentElement;
+            }
+
+            tagName = utils.getTagName(target);
+            if (tagName === 'span' && target.classList.contains('b3-list-item__toggle')) {
+                return target;
+            }
+            return null;
+        }
+
+        // 触发处理 点击队列
+        async processClickQueue() {
+            if (this.isProcessing) return;
+
+            this.isProcessing = true;
+            while (this.clickQueue.length) {
+                const action = this.clickQueue.shift();
+                await action();
+            }
+            this.isProcessing = false;
+        }
+
+        // 处理鼠标点击事件
+        handleClickEvent(event) {
+            const element = event.target;
+            const clickType = this.getClickType(element);
+            const currentTime = Date.now();
+
+            // 处理双击事件
+            if (CONFIG.DOUBLE_SWITCH && 
+                currentTime - this.lastClickTime < CONFIG.DOUBLE_INTERVAL &&
+                clickType === CLICK_TYPE.ARROW) {
+                
+                event.stopPropagation();
+                event.preventDefault();
+                utils.log("双击折叠按钮触发展开全部");
+
+                this.clickQueue.push(async () => {
+                    const arrowSpan = this.getArrowSpan(element);
+                    if (!arrowSpan) return;
+
+                    // 获取当前折叠状态
+                    const svg = arrowSpan.querySelector('svg');
+                    const isCollapsed = !svg.classList.contains('b3-list-item__arrow--open');
+
+                    // 如果当前是折叠状态则先展开
+                    if (isCollapsed) {
+                        arrowSpan.click();
+                        await utils.sleep(CONFIG.UNFOLD_INTERVAL);
+                    }
+
+                    // 展开所有子节点
+                    const childNodes = arrowSpan.parentElement.nextElementSibling?.children;
+                    if (childNodes) {
+                        for (const node of childNodes) {
+                            const childArrow = node.querySelector('.b3-list-item__toggle:not(.fn__hidden)');
+                            if (childArrow) {
+                                childArrow.click();
+                                await utils.sleep(CONFIG.UNFOLD_INTERVAL);
+                            }
+                        }
+                    }
+                });
+
+                this.processClickQueue();
+            }
+
+            this.lastClickTime = currentTime;
+        }
+    }
+
+    // 初始化并监听点击事件
+    let initInterval = setInterval(() => {
+        const treeContainer = document.querySelector('.sy__file>.fn__flex-1');
+        if (treeContainer) {
+            clearInterval(initInterval);
+            const handler = new TreeHandler();
+            treeContainer.addEventListener('click', e => handler.handleClickEvent(e), true);
+        }
+    }, 200);
+})();
